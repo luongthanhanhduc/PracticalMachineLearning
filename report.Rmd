@@ -1,0 +1,180 @@
+---
+title: "Classification for Weight Lifting Exercise Dataset"
+author: "Duc Thanh Anh Luong"
+date: "July 21, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Synopsis
+
+Human Activity Recognition is an important machine learning problem in which personal acitivity tracking devices such as Fitbit should be able to distinguish different kinds of daily activities using their sensors. 
+
+In this project, we investigate Human Activity Recognition problem using the [Weight Lifting Exercises Dataset](http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises). In this dataset, six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: correct execution of exercise (class A), 4 common mistakes (class B, C, D and E). Our task is to use the measurements from accelerometers on the belt, forearm, arm, and dumbell to recognize which activity a person is doing.
+
+## 1. Data Processing
+
+First, we load the dataset into workspace:
+
+```{r load_data, cache=TRUE, echo=TRUE}
+dataset <- read.csv(file = "./pml-training.csv", na.strings = c("NA", ""))
+```
+
+Now, we remove some unrelevant columns from the dataset. In particular, the first column is only the row index and can be removed. In addition, we also remove columns that contains a lot of NA value. Furthermore, since time stamps and new window columns don't provide any useful information for classifying activities, we remove them from consideration.
+
+```{r remove_col, cache=TRUE, echo=TRUE}
+dataset <- dataset[, -1]
+
+na_col <- NULL
+for (i in 1:ncol(dataset)) {
+  if (sum(is.na(dataset[, i])) / nrow(dataset) > 0.9)
+    na_col <- c(na_col, i)
+}
+dataset <- dataset[, -na_col]
+
+dataset <- dataset[, -c(2:5)]
+```
+
+Finally, when considering an actual human activity recognition task, with the assumption that the device can only receive measurements from sensors without knowing who is doing an activity, we don't provide username as an input for building our classifier. 
+
+```{r remove_username, cache=TRUE, echo=TRUE}
+dataset <- dataset[, -1]
+```
+
+## 2. Splitting Dataset
+
+Within dataset of `nrow(training)` data samples with known labels for each activity, we further divide it into 2 sets: training set (70%) and testing set (30%).
+
+```{r splitting_dataset, cache=TRUE, echo=TRUE}
+library(caret)
+set.seed(1234)
+trainIndex <- createDataPartition(dataset$classe, p=0.7, list=FALSE) 
+training <- dataset[trainIndex,]
+testing <- dataset[-trainIndex,]
+```
+
+## 3. Building classifiers
+
+In this section, we use 4 methods (K-nearest neighbor, Random Forest, SVM, Neural Networks) to build classifiers and later on, in section 4, we compare the performance between these methods. 
+
+For numerical measurements, we first preprocess it by normalizing them so that each variable has mean zero and standard deviation 1. We use 4-folds cross-validation to build the classifiers and tune for optimal hyper-parameters.
+
+We now train the classifiers with setting has been mentioned before
+
+```{r training, cache=TRUE, echo=TRUE, results="hide"}
+# settings to use 4-folds cross-validation
+ctrl <- trainControl(method = "cv", number = 4)
+
+# create a time dataset to store the running time of 4 methods
+time <- data.frame(method = c("KNN", "RF", "SVM", "NN"),
+                   training_time = rep(NA, 4), prediction_time = rep(NA, 4))
+
+start_time <- Sys.time()
+knnFit <- train(classe~., data = training, trControl = ctrl, 
+                preProcess=c("center","scale"), method="knn")
+time[1, "training_time"] <- Sys.time() - start_time
+
+start_time <- Sys.time()
+rfFit <- train(classe~., data = training, trControl = ctrl, 
+               preProcess=c("center","scale"), method="rf")
+time[2, "training_time"] <- Sys.time() - start_time
+
+start_time <- Sys.time()
+svmFit <- train(classe~., data = training, trControl = ctrl, 
+                preProcess=c("center","scale"), method="svmRadial")
+time[3, "training_time"] <- Sys.time() - start_time
+
+start_time <- Sys.time()
+nnFit <- train(classe~., data = training, trControl = ctrl, 
+               preProcess=c("center","scale"), method="nnet") 
+time[4, "training_time"] <- Sys.time() - start_time
+```
+
+After obtaining the models from training, we perform prediction on our testing set. Since our interest is to evaluate out-of-sample errors, we only perform prediction on testing set while omitting prediction for training set.
+
+```{r prediction, cache=TRUE, echo=TRUE}
+start_time <- Sys.time()
+knnResult <- predict(knnFit, testing[,1:ncol(testing)-1])
+time[1, "prediction_time"] <- Sys.time() - start_time
+
+start_time <- Sys.time()
+rfResult <- predict(rfFit, testing[,1:ncol(testing)-1])
+time[2, "prediction_time"] <- Sys.time() - start_time
+
+start_time <- Sys.time()
+svmResult <- predict(svmFit, testing[,1:ncol(testing)-1])
+time[3, "prediction_time"] <- Sys.time() - start_time
+
+start_time <- Sys.time()
+nnResult <- predict(svmFit, testing[,1:ncol(testing)-1])
+time[4, "prediction_time"] <- Sys.time() - start_time
+```
+
+Now, we compare the prediction obtained for testing set with their labels to have accuracy for each method.
+
+```{r confusion, cache=TRUE, echo=TRUE}
+knnConfusion <- confusionMatrix(knnResult, testing$classe)
+rfConfusion <- confusionMatrix(rfResult, testing$classe)
+svmConfusion <- confusionMatrix(svmResult, testing$classe)
+nnConfusion <- confusionMatrix(nnResult, testing$classe)
+```
+
+## 4. Performance comparison between different methods
+
+In order to show the differences between these methods, we will compare them in terms of running time and accuracy on testing set. The accuracy on testing set is also an evaluation for out-of-sample errors of each method.
+
+First, we compare the difference in training time and prediction time of different classifiers.
+
+```{r time_compare, cache=TRUE, echo=TRUE}
+library(reshape2)
+time <- melt(time, id=c("method"))
+ggplot(data=time) + geom_bar(aes(x=method, y=value, fill=variable), stat = "identity") +
+  labs(x = "method", y = "running time (minutes)") +
+  scale_fill_grey(labels=c("Training", "Prediction"), name = "Type") + 
+  theme_bw(base_size = 20)
+```
+
+As observed in the above figure, the KNN's running time is highest for both training and testing. This is because KNN requires determining the top nearest neighbors for each data points and repeating that computation many times to determine the most appropriate number of k. 
+
+Second, we compare the accuracy of those classifiers on testing set
+
+```{r accuracy_compare, cache=TRUE, echo=TRUE}
+accuracy <- data.frame(method = c("KNN", "RF", "SVM", "NN"), accuracy = rep(NA, 4))
+accuracy[1, 2] <- knnConfusion$overall[1]
+accuracy[2, 2] <- rfConfusion$overall[1]
+accuracy[3, 2] <- svmConfusion$overall[1]
+accuracy[4, 2] <- nnConfusion$overall[1]
+ggplot(data=accuracy) + geom_bar(aes(x=method, y=accuracy), stat="identity")
+```
+
+From the above figure, we can observe that all 4 methods achieve very high accuracy on testing set. Among them, random forest and KNN achieve close to 100% accuracy while SVM and Neural Networks have slightly lower accuracy.
+
+## 5. Prediction for 20 test cases
+
+First, we load 20 test cases into workspace and remove unrelevant columns as what we did with our dataset.
+
+```{r load_test_cases, cache=TRUE, echo=TRUE}
+testCases <- read.csv(file = "./pml-testing.csv", na.strings = c("NA", ""))
+testCases <- testCases[, -1]
+testCases <- testCases[, -na_col]
+testCases <- testCases[, -c(2:5)]
+testCases <- testCases[, -1]
+```
+
+Then, we perform prediction on those 20 test cases and see the results.
+
+```{r predict_test_cases, cache=TRUE, echo=TRUE}
+knnPred <- predict(knnFit, testCases[,1:ncol(testing)-1])
+rfPred <- predict(rfFit, testCases[,1:ncol(testing)-1])
+svmPred <- predict(svmFit, testCases[,1:ncol(testing)-1])
+nnPred <- predict(nnFit, testCases[,1:ncol(testing)-1])
+print(knnPred)
+print(rfPred)
+print(svmPred)
+print(nnPred)
+```
+
+As shown above, the prediction for 20 test cases are very similar among 4 methods. They are only different on some particular cases. With this consistency in prediction results, we expect to have accuracy more than 90% as we have with testing set in section 4.
